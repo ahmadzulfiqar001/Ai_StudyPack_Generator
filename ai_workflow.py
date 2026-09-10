@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Dict, Callable
+from typing import Any, Dict, Callable, Optional
 
 try:
     from openai import OpenAI
@@ -9,49 +9,251 @@ except ImportError:
     OpenAI = None
 
 
+# ============================================================
+# GROQ CONFIGURATION
+# ============================================================
+
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+DEFAULT_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "openai/gpt-oss-20b",
+)
+
+
 class StudyPackWorkflow:
-    """Five-stage AI workflow with context passing and fallback handling."""
+    """
+    Five-stage AI study-pack workflow.
 
-    def __init__(self, api_key: str | None = None, model: str = "gpt-5"):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.model = model or os.getenv("OPENAI_MODEL", "gpt-5")
-        self.client = OpenAI(api_key=self.api_key) if self.api_key and OpenAI else None
+    Workflow:
+        Planning
+        ↓
+        Content Generation
+        ↓
+        Assessment
+        ↓
+        Review
+        ↓
+        Refinement
 
-    def _call_json(self, system: str, user: str) -> Dict[str, Any]:
-        if not self.client:
-            raise RuntimeError("OPENAI_API_KEY is not configured.")
+    Uses Groq through the OpenAI-compatible API.
+    """
 
-        response = self.client.responses.create(
-            model=self.model,
-            instructions=system,
-            input=user,
-        )
-        text = response.output_text.strip()
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        # ----------------------------------------------------
+        # API KEY
+        # ----------------------------------------------------
 
-        # Remove Markdown code fences if a model returns them.
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-        text = re.sub(r"\s*```$", "", text)
+        self.api_key = (
+            api_key
+            or os.getenv("GROQ_API_KEY", "")
+        ).strip()
+
+        # ----------------------------------------------------
+        # MODEL
+        # ----------------------------------------------------
+
+        self.model = (
+            model
+            or os.getenv(
+                "GROQ_MODEL",
+                DEFAULT_MODEL,
+            )
+        ).strip()
+
+        # ----------------------------------------------------
+        # CLIENT
+        # ----------------------------------------------------
+
+        self.client = None
+
+        if self.api_key and OpenAI:
+
+            self.client = OpenAI(
+                api_key=self.api_key,
+                base_url=GROQ_BASE_URL,
+            )
+
+
+    # ========================================================
+    # JSON AI CALL
+    # ========================================================
+
+    def _call_json(
+        self,
+        system: str,
+        user: str,
+    ) -> Dict[str, Any]:
+
+        if not self.api_key:
+            raise RuntimeError(
+                "GROQ_API_KEY is not configured."
+            )
+
+        if OpenAI is None:
+            raise RuntimeError(
+                "The openai package is not installed. "
+                "Add openai to requirements.txt."
+            )
+
+        if self.client is None:
+            raise RuntimeError(
+                "Groq client could not be initialized."
+            )
 
         try:
-            return json.loads(text)
+
+            response = self.client.responses.create(
+                model=self.model,
+                instructions=system,
+                input=user,
+            )
+
+        except Exception as exc:
+
+            raise RuntimeError(
+                f"Groq API error using model "
+                f"'{self.model}': {exc}"
+            ) from exc
+
+        # ----------------------------------------------------
+        # Extract response text
+        # ----------------------------------------------------
+
+        text = getattr(
+            response,
+            "output_text",
+            "",
+        )
+
+        if not text:
+            raise ValueError(
+                "Groq returned an empty response."
+            )
+
+        text = text.strip()
+
+        # ----------------------------------------------------
+        # Remove Markdown code fences
+        # ----------------------------------------------------
+
+        text = re.sub(
+            r"^```(?:json)?\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        text = re.sub(
+            r"\s*```$",
+            "",
+            text,
+        )
+
+        text = text.strip()
+
+        # ----------------------------------------------------
+        # Parse JSON directly
+        # ----------------------------------------------------
+
+        try:
+
+            result = json.loads(text)
+
+            if not isinstance(result, dict):
+                raise ValueError(
+                    "AI response JSON must be an object."
+                )
+
+            return result
+
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", text, re.S)
-            if not match:
-                raise ValueError("AI returned invalid JSON.")
-            return json.loads(match.group(0))
+            pass
 
-    def planning_stage(self, subject: str, level: str, material: str, pack_size: str):
-        system = """You are the Planning Agent for a study-pack workflow.
-Return ONLY valid JSON. Do not invent information not supported by the material."""
+        # ----------------------------------------------------
+        # Try extracting JSON object
+        # ----------------------------------------------------
+
+        match = re.search(
+            r"\{.*\}",
+            text,
+            re.DOTALL,
+        )
+
+        if not match:
+
+            raise ValueError(
+                "Groq returned invalid JSON. "
+                f"Response received: {text[:500]}"
+            )
+
+        try:
+
+            result = json.loads(
+                match.group(0)
+            )
+
+        except json.JSONDecodeError as exc:
+
+            raise ValueError(
+                "Groq returned malformed JSON."
+            ) from exc
+
+        if not isinstance(result, dict):
+
+            raise ValueError(
+                "AI response JSON must be an object."
+            )
+
+        return result
+
+
+    # ========================================================
+    # STAGE 1 — PLANNING
+    # ========================================================
+
+    def planning_stage(
+        self,
+        subject: str,
+        level: str,
+        material: str,
+        pack_size: str,
+    ):
+
+        system = """
+You are the Planning Agent in an AI Study Pack Generator.
+
+Your job is to analyze the supplied study material and create
+a structured study plan.
+
+Rules:
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Do not invent facts that are not supported by the material.
+- Identify the most important concepts.
+- Adapt the plan to the student's level.
+- Adapt the depth to the requested pack size.
+"""
+
         user = f"""
-Subject: {subject}
-Student level: {level}
-Pack size: {pack_size}
+Subject:
+{subject}
 
-Study material:
+Student Level:
+{level}
+
+Pack Size:
+{pack_size}
+
+Study Material:
 {material}
 
-Return:
+Return exactly this JSON structure:
+
 {{
   "learning_objectives": [],
   "main_topics": [],
@@ -61,19 +263,55 @@ Return:
   "generation_plan": []
 }}
 """
-        return self._call_json(system, user)
 
-    def content_stage(self, context: Dict[str, Any]):
-        system = """You are the Content Generation Agent.
-Return ONLY valid JSON and stay grounded in the supplied study material."""
+        return self._call_json(
+            system,
+            user,
+        )
+
+
+    # ========================================================
+    # STAGE 2 — CONTENT GENERATION
+    # ========================================================
+
+    def content_stage(
+        self,
+        context: Dict[str, Any],
+    ):
+
+        system = """
+You are the Content Generation Agent.
+
+Create high-quality study material based ONLY on the
+original study material and planning information.
+
+Rules:
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Do not invent unsupported facts.
+- Keep explanations appropriate for the student's level.
+- Make the content clear and useful for exam preparation.
+"""
+
         user = f"""
-Original input:
-{json.dumps(context["input"], ensure_ascii=False)}
+Original Study Material:
 
-Planning context:
-{json.dumps(context["planning"], ensure_ascii=False)}
+{json.dumps(
+    context["input"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
-Return:
+Planning Context:
+
+{json.dumps(
+    context["planning"],
+    ensure_ascii=False,
+    indent=2,
+)}
+
+Return exactly this JSON structure:
+
 {{
   "summary": "",
   "key_concepts": [],
@@ -81,57 +319,157 @@ Return:
   "facts_and_formulas": [],
   "examples": [],
   "flashcards": [
-    {{"question": "", "answer": ""}}
+    {{
+      "question": "",
+      "answer": ""
+    }}
   ]
 }}
 """
-        return self._call_json(system, user)
 
-    def assessment_stage(self, context: Dict[str, Any]):
-        system = """You are the Assessment Agent.
-Return ONLY valid JSON. Questions must be answerable from the supplied material."""
+        return self._call_json(
+            system,
+            user,
+        )
+
+
+    # ========================================================
+    # STAGE 3 — ASSESSMENT
+    # ========================================================
+
+    def assessment_stage(
+        self,
+        context: Dict[str, Any],
+    ):
+
+        system = """
+You are the Assessment Agent.
+
+Create an assessment based strictly on the supplied
+study material, planning, and generated content.
+
+Rules:
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Questions must be answerable from the supplied material.
+- Include correct answers.
+- Include explanations where appropriate.
+- Match the student's level.
+"""
+
         user = f"""
 Planning:
-{json.dumps(context["planning"], ensure_ascii=False)}
 
-Content:
-{json.dumps(context["content"], ensure_ascii=False)}
+{json.dumps(
+    context["planning"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
-Return:
+Generated Content:
+
+{json.dumps(
+    context["content"],
+    ensure_ascii=False,
+    indent=2,
+)}
+
+Return exactly this JSON structure:
+
 {{
   "mcqs": [
-    {{"question": "", "options": [], "answer": "", "explanation": ""}}
+    {{
+      "question": "",
+      "options": [],
+      "answer": "",
+      "explanation": ""
+    }}
   ],
   "short_questions": [
-    {{"question": "", "answer": ""}}
+    {{
+      "question": "",
+      "answer": ""
+    }}
   ],
   "conceptual_questions": [
-    {{"question": "", "answer": ""}}
+    {{
+      "question": "",
+      "answer": ""
+    }}
   ],
   "application_questions": [
-    {{"question": "", "answer": ""}}
+    {{
+      "question": "",
+      "answer": ""
+    }}
   ]
 }}
 """
-        return self._call_json(system, user)
 
-    def review_stage(self, context: Dict[str, Any]):
-        system = """You are a strict Study Pack Review Agent.
-Return ONLY valid JSON."""
+        return self._call_json(
+            system,
+            user,
+        )
+
+
+    # ========================================================
+    # STAGE 4 — REVIEW
+    # ========================================================
+
+    def review_stage(
+        self,
+        context: Dict[str, Any],
+    ):
+
+        system = """
+You are a strict Study Pack Review Agent.
+
+Evaluate the generated study pack for:
+
+1. Source grounding
+2. Topic coverage
+3. Accuracy
+4. Clarity
+5. Student-level suitability
+6. Assessment quality
+7. Personalization
+
+Rules:
+- Return ONLY valid JSON.
+- Do not use Markdown.
+- Give a quality score from 0 to 100.
+- Identify concrete issues.
+- Identify missing topics.
+- Provide actionable recommendations.
+"""
+
         user = f"""
 Planning:
-{json.dumps(context["planning"], ensure_ascii=False)}
+
+{json.dumps(
+    context["planning"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Content:
-{json.dumps(context["content"], ensure_ascii=False)}
+
+{json.dumps(
+    context["content"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Assessment:
-{json.dumps(context["assessment"], ensure_ascii=False)}
 
-Review for source grounding, coverage, clarity, level suitability, assessment quality,
-and personalization.
+{json.dumps(
+    context["assessment"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
-Return:
+Return exactly this JSON structure:
+
 {{
   "quality_score": 0,
   "issues": [],
@@ -139,92 +477,304 @@ Return:
   "recommendations": []
 }}
 """
-        return self._call_json(system, user)
 
-    def refinement_stage(self, context: Dict[str, Any]):
-        system = """You are the Refinement Agent.
-Return a polished Markdown study pack. Do not invent unsupported facts."""
+        return self._call_json(
+            system,
+            user,
+        )
+
+
+    # ========================================================
+    # STAGE 5 — REFINEMENT
+    # ========================================================
+
+    def refinement_stage(
+        self,
+        context: Dict[str, Any],
+    ):
+
+        if not self.client:
+
+            raise RuntimeError(
+                "Groq AI client is unavailable."
+            )
+
+        system = """
+You are the final Refinement Agent.
+
+Create a polished, personalized Markdown study pack
+using the supplied material and all previous workflow stages.
+
+Rules:
+- Stay grounded in the original study material.
+- Do not invent unsupported facts.
+- Incorporate useful recommendations from the review.
+- Make the result clear and exam-friendly.
+- Return ONLY the final Markdown study pack.
+- Do not wrap the answer in a Markdown code fence.
+"""
+
         user = f"""
-Original input:
-{json.dumps(context["input"], ensure_ascii=False)}
+Original Input:
+
+{json.dumps(
+    context["input"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Planning:
-{json.dumps(context["planning"], ensure_ascii=False)}
+
+{json.dumps(
+    context["planning"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Content:
-{json.dumps(context["content"], ensure_ascii=False)}
+
+{json.dumps(
+    context["content"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Assessment:
-{json.dumps(context["assessment"], ensure_ascii=False)}
+
+{json.dumps(
+    context["assessment"],
+    ensure_ascii=False,
+    indent=2,
+)}
 
 Review:
-{json.dumps(context["review"], ensure_ascii=False)}
 
-Create the final personalized study pack with:
+{json.dumps(
+    context["review"],
+    ensure_ascii=False,
+    indent=2,
+)}
+
+Create the final study pack using this structure:
+
 # Final Study Pack
+
 ## Summary
+
 ## Learning Objectives
+
 ## Key Concepts
+
 ## Important Definitions
+
 ## Important Facts / Formulas
+
 ## Examples
+
 ## Flashcards
+
 ## Practice Questions
+
 ## 7-Day Study Plan
+
 ## Final Self-Test
+
 ## Answer Key
 """
-        if not self.client:
-            raise RuntimeError("AI unavailable; using fallback.")
-        response = self.client.responses.create(
-            model=self.model,
-            instructions=system,
-            input=user,
-        )
-        return response.output_text.strip()
 
-    def fallback_pack(self, subject: str, level: str, material: str, pack_size: str) -> str:
-        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", material) if p.strip()]
-        sentences = re.split(r"(?<=[.!?])\s+", material.strip())
-        useful = [x for x in (paragraphs + sentences) if len(x) > 25][:10]
+        try:
 
-        lines = [
-            f"# Final Study Pack — {subject or 'Study Pack'}",
-            f"**Level:** {level}",
-            f"**Mode:** {pack_size}",
+            response = self.client.responses.create(
+                model=self.model,
+                instructions=system,
+                input=user,
+            )
+
+        except Exception as exc:
+
+            raise RuntimeError(
+                f"Groq API error during refinement "
+                f"using model '{self.model}': {exc}"
+            ) from exc
+
+        text = getattr(
+            response,
+            "output_text",
             "",
-            "## Summary",
-            "The following points were extracted from your supplied material:",
-        ]
-        lines += [f"- {x}" for x in useful[:5]]
-        lines += ["", "## Key Concepts"]
-        lines += [f"{i}. {x}" for i, x in enumerate(useful[:7], 1)]
-        lines += ["", "## Flashcards"]
+        )
 
-        for i, x in enumerate(useful[:7], 1):
-            lines += [
-                f"**Q{i}.** Explain this idea: {x}",
-                f"**A{i}.** Review the source material and explain it in your own words.",
-                "",
+        if not text:
+
+            raise ValueError(
+                "Groq returned an empty final study pack."
+            )
+
+        return text.strip()
+
+
+    # ========================================================
+    # FALLBACK STUDY PACK
+    # ========================================================
+
+    def fallback_pack(
+        self,
+        subject: str,
+        level: str,
+        material: str,
+        pack_size: str,
+    ) -> str:
+
+        paragraphs = [
+            p.strip()
+            for p in re.split(
+                r"\n\s*\n",
+                material,
+            )
+            if p.strip()
+        ]
+
+        sentences = re.split(
+            r"(?<=[.!?])\s+",
+            material.strip(),
+        )
+
+        useful = [
+            item
+            for item in (
+                paragraphs + sentences
+            )
+            if len(item) > 25
+        ][:10]
+
+        if not useful:
+
+            useful = [
+                material.strip()
+            ] if material.strip() else [
+                "No study material was provided."
             ]
 
-        lines += [
-            "## Practice Questions",
-            *[f"{i}. Explain the main idea in: {x}" for i, x in enumerate(useful[:7], 1)],
+        lines = [
+            f"# Final Study Pack — "
+            f"{subject or 'Study Pack'}",
             "",
-            "## 7-Day Study Plan",
-            "1. Read and annotate the material.",
-            "2. Review the key concepts.",
-            "3. Practice the flashcards.",
-            "4. Answer the practice questions.",
-            "5. Review weak areas.",
-            "6. Take a self-test.",
-            "7. Perform a final review.",
+            f"**Student Level:** {level}",
+            f"**Pack Size:** {pack_size}",
+            "",
+            "## Summary",
+            "",
+            "The following information was extracted "
+            "from the supplied study material.",
+            "",
         ]
+
+        lines.extend(
+            f"- {item}"
+            for item in useful[:5]
+        )
+
+        lines.extend(
+            [
+                "",
+                "## Key Concepts",
+                "",
+            ]
+        )
+
+        lines.extend(
+            f"{index}. {item}"
+            for index, item in enumerate(
+                useful[:7],
+                1,
+            )
+        )
+
+        lines.extend(
+            [
+                "",
+                "## Flashcards",
+                "",
+            ]
+        )
+
+        for index, item in enumerate(
+            useful[:7],
+            1,
+        ):
+
+            lines.extend(
+                [
+                    f"**Q{index}.** "
+                    f"What is the main idea of this point?",
+                    "",
+                    f"**A{index}.** {item}",
+                    "",
+                ]
+            )
+
+        lines.extend(
+            [
+                "## Practice Questions",
+                "",
+            ]
+        )
+
+        lines.extend(
+            f"{index}. Explain the main idea "
+            f"of the following point: {item}"
+            for index, item in enumerate(
+                useful[:7],
+                1,
+            )
+        )
+
+        lines.extend(
+            [
+                "",
+                "## 7-Day Study Plan",
+                "",
+                "### Day 1",
+                "Read and annotate the material.",
+                "",
+                "### Day 2",
+                "Review the key concepts.",
+                "",
+                "### Day 3",
+                "Practice the flashcards.",
+                "",
+                "### Day 4",
+                "Answer the practice questions.",
+                "",
+                "### Day 5",
+                "Review difficult or weak areas.",
+                "",
+                "### Day 6",
+                "Take a self-test without looking at the answers.",
+                "",
+                "### Day 7",
+                "Perform a final review of the complete material.",
+                "",
+            ]
+        )
+
         return "\n".join(lines)
 
-    def run(self, subject: str, level: str, material: str, pack_size: str,
-            progress: Callable[[int, str], None] | None = None) -> Dict[str, Any]:
+
+    # ========================================================
+    # RUN COMPLETE WORKFLOW
+    # ========================================================
+
+    def run(
+        self,
+        subject: str,
+        level: str,
+        material: str,
+        pack_size: str,
+        progress: Callable[
+            [int, str],
+            None
+        ] | None = None,
+    ) -> Dict[str, Any]:
 
         context: Dict[str, Any] = {
             "input": {
@@ -241,43 +791,140 @@ Create the final personalized study pack with:
             "errors": [],
         }
 
+        # ----------------------------------------------------
+        # Stage definitions
+        # ----------------------------------------------------
+
         stages = [
-            ("Planning", lambda: self.planning_stage(subject, level, material, pack_size)),
-            ("Content Generation", lambda: self.content_stage(context)),
-            ("Assessment", lambda: self.assessment_stage(context)),
-            ("Review", lambda: self.review_stage(context)),
-            ("Refinement", lambda: self.refinement_stage(context)),
+            (
+                "Planning",
+                lambda: self.planning_stage(
+                    subject,
+                    level,
+                    material,
+                    pack_size,
+                ),
+            ),
+            (
+                "Content Generation",
+                lambda: self.content_stage(
+                    context
+                ),
+            ),
+            (
+                "Assessment",
+                lambda: self.assessment_stage(
+                    context
+                ),
+            ),
+            (
+                "Review",
+                lambda: self.review_stage(
+                    context
+                ),
+            ),
+            (
+                "Refinement",
+                lambda: self.refinement_stage(
+                    context
+                ),
+            ),
         ]
 
-        for index, (name, function) in enumerate(stages, 1):
+        result_keys = [
+            "planning",
+            "content",
+            "assessment",
+            "review",
+            "final_pack",
+        ]
+
+        # ----------------------------------------------------
+        # Execute stages
+        # ----------------------------------------------------
+
+        for index, (
+            name,
+            function,
+        ) in enumerate(
+            stages,
+            1,
+        ):
+
             if progress:
-                progress(index, name)
+
+                progress(
+                    index,
+                    name,
+                )
 
             try:
+
                 result = function()
-                context[["planning", "content", "assessment", "review", "final_pack"][index - 1]] = result
+
+                context[
+                    result_keys[index - 1]
+                ] = result
+
             except Exception as exc:
-                context["errors"].append({
-                    "stage": name,
-                    "error": f"{type(exc).__name__}: {exc}"
-                })
+
+                error_message = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                context["errors"].append(
+                    {
+                        "stage": name,
+                        "error": error_message,
+                    }
+                )
+
+                # ------------------------------------------------
+                # If refinement fails, create fallback pack.
+                # ------------------------------------------------
 
                 if name == "Refinement":
-                    context["final_pack"] = self.fallback_pack(
-                        subject, level, material, pack_size
+
+                    context["final_pack"] = (
+                        self.fallback_pack(
+                            subject,
+                            level,
+                            material,
+                            pack_size,
+                        )
                     )
+
                     break
 
-                # Stop AI chain if an earlier dependency fails.
-                if index < 5:
-                    context["final_pack"] = self.fallback_pack(
-                        subject, level, material, pack_size
+                # ------------------------------------------------
+                # Earlier-stage failure means dependencies
+                # are unavailable, so stop the AI chain.
+                # ------------------------------------------------
+
+                context["final_pack"] = (
+                    self.fallback_pack(
+                        subject,
+                        level,
+                        material,
+                        pack_size,
                     )
-                    break
+                )
+
+                break
+
+        # ----------------------------------------------------
+        # Guarantee final pack
+        # ----------------------------------------------------
 
         if not context["final_pack"]:
-            context["final_pack"] = self.fallback_pack(
-                subject, level, material, pack_size
+
+            context["final_pack"] = (
+                self.fallback_pack(
+                    subject,
+                    level,
+                    material,
+                    pack_size,
+                )
             )
 
         return context
