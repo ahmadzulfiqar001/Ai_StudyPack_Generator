@@ -21,7 +21,6 @@ def get_api_key():
 try:
 key = st.secrets.get("GROQ_API_KEY", "")
 
-```
     if key:
         return str(key).strip()
 
@@ -32,7 +31,6 @@ return os.getenv(
     "GROQ_API_KEY",
     "",
 ).strip()
-```
 
 def create_pdf_file(content, title):
 from reportlab.lib.enums import TA_CENTER
@@ -50,7 +48,6 @@ ListFlowable,
 ListItem,
 )
 
-```
 file = tempfile.NamedTemporaryFile(
     delete=False,
     suffix=".pdf",
@@ -219,13 +216,11 @@ flush_bullets()
 document.build(story)
 
 return file.name
-```
 
 def create_word_file(content):
 from docx import Document
 from docx.shared import Pt
 
-```
 document = Document()
 
 normal_style = document.styles["Normal"]
@@ -289,7 +284,6 @@ file.close()
 document.save(file.name)
 
 return file.name
-```
 
 st.title(
 "📚 AI Study Pack Generator"
@@ -303,7 +297,6 @@ st.caption(
 with st.sidebar:
 st.header("⚙️ Study Settings")
 
-```
 subject = st.text_input(
     "Subject",
     placeholder="e.g. Machine Learning",
@@ -360,7 +353,6 @@ st.markdown(
     5. Refinement
     """
 )
-```
 
 st.subheader("📖 Study Material")
 
@@ -392,7 +384,6 @@ type=[
 if uploaded:
 temp_path = None
 
-```
 try:
     suffix = os.path.splitext(
         uploaded.name
@@ -434,7 +425,6 @@ finally:
             os.remove(temp_path)
         except OSError:
             pass
-```
 
 st.divider()
 
@@ -445,8 +435,7 @@ use_container_width=True,
 )
 
 if generate:
-
-```
+    
 try:
     validate_material(material)
 
