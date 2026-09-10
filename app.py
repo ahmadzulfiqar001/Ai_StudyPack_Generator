@@ -19,8 +19,7 @@ DEFAULT_MODEL = os.getenv(
 
 def get_api_key():
 try:
-key = st.secrets.get("GROQ_API_KEY", "")
-
+    key = st.secrets.get("GROQ_API_KEY", "")
     if key:
         return str(key).strip()
 
