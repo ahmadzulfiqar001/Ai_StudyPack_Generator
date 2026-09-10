@@ -9,7 +9,7 @@ from docx.shared import Pt
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 from ai_workflow import StudyPackWorkflow
 from utils import read_uploaded_file, validate_material
@@ -87,9 +87,7 @@ story = [
     )
 ]
 
-lines = content.splitlines()
-
-for line in lines:
+for line in content.splitlines():
     stripped = line.strip()
 
     if not stripped:
@@ -128,11 +126,28 @@ for line in lines:
 
     if stripped.startswith("- ") or stripped.startswith("* "):
         text = stripped[2:].strip()
-        text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
-        text = re.sub(r"__(.*?)__", r"<b>\1</b>", text)
-        text = escape(text, quote=False)
-        text = text.replace("&lt;b&gt;", "<b>")
-        text = text.replace("&lt;/b&gt;", "</b>")
+        text = re.sub(
+            r"\*\*(.*?)\*\*",
+            r"<b>\1</b>",
+            text,
+        )
+        text = re.sub(
+            r"__(.*?)__",
+            r"<b>\1</b>",
+            text,
+        )
+        text = escape(
+            text,
+            quote=False,
+        )
+        text = text.replace(
+            "&lt;b&gt;",
+            "<b>",
+        )
+        text = text.replace(
+            "&lt;/b&gt;",
+            "</b>",
+        )
 
         story.append(
             Paragraph(
@@ -142,11 +157,28 @@ for line in lines:
         )
         continue
 
-    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", stripped)
-    text = re.sub(r"__(.*?)__", r"<b>\1</b>", text)
-    text = escape(text, quote=False)
-    text = text.replace("&lt;b&gt;", "<b>")
-    text = text.replace("&lt;/b&gt;", "</b>")
+    text = re.sub(
+        r"\*\*(.*?)\*\*",
+        r"<b>\1</b>",
+        stripped,
+    )
+    text = re.sub(
+        r"__(.*?)__",
+        r"<b>\1</b>",
+        text,
+    )
+    text = escape(
+        text,
+        quote=False,
+    )
+    text = text.replace(
+        "&lt;b&gt;",
+        "<b>",
+    )
+    text = text.replace(
+        "&lt;/b&gt;",
+        "</b>",
+    )
 
     story.append(
         Paragraph(
@@ -166,7 +198,10 @@ document = SimpleDocTemplate(
 
 document.build(story)
 
-with open(temp_path, "rb") as file:
+with open(
+    temp_path,
+    "rb",
+) as file:
     pdf_bytes = file.read()
 
 try:
@@ -225,6 +260,7 @@ for line in content.splitlines():
         paragraph = document.add_paragraph(
             style="List Bullet",
         )
+
         text = stripped[2:].strip()
 
         parts = re.split(
@@ -293,7 +329,10 @@ for paragraph in document.paragraphs:
 
 document.save(temp_path)
 
-with open(temp_path, "rb") as file:
+with open(
+    temp_path,
+    "rb",
+) as file:
     word_bytes = file.read()
 
 try:
@@ -356,7 +395,9 @@ if api_key:
     st.caption(f"Model: {model}")
 else:
     st.error("Groq API key not detected")
-    st.info("Add GROQ_API_KEY in Streamlit Secrets.")
+    st.info(
+        "Add GROQ_API_KEY in Streamlit Secrets."
+    )
 
 st.divider()
 
@@ -384,12 +425,20 @@ material = st.text_area(
 "Paste your notes or lecture material",
 value=saved_material,
 height=300,
-placeholder="Paste the material you want to turn into a personalized study pack...",
+placeholder=(
+"Paste the material you want to turn into "
+"a personalized study pack..."
+),
 )
 
 uploaded = st.file_uploader(
 "Or upload a file",
-type=["pdf", "txt", "md", "csv"],
+type=[
+"pdf",
+"txt",
+"md",
+"csv",
+],
 )
 
 if uploaded:
@@ -397,13 +446,17 @@ temp_path = None
 
 ```
 try:
-    suffix = os.path.splitext(uploaded.name)[1]
+    suffix = os.path.splitext(
+        uploaded.name
+    )[1]
 
     with tempfile.NamedTemporaryFile(
         delete=False,
         suffix=suffix,
     ) as temp_file:
-        temp_file.write(uploaded.getbuffer())
+        temp_file.write(
+            uploaded.getbuffer()
+        )
         temp_path = temp_file.name
 
     uploaded_text = read_uploaded_file(
@@ -423,7 +476,10 @@ except Exception as exc:
     )
 
 finally:
-    if temp_path and os.path.exists(temp_path):
+    if (
+        temp_path
+        and os.path.exists(temp_path)
+    ):
         try:
             os.remove(temp_path)
         except OSError:
@@ -449,9 +505,12 @@ st.stop()
 api_key = get_api_key()
 
 if not api_key:
-    st.error("Groq API key is missing.")
+    st.error(
+        "Groq API key is missing."
+    )
     st.info(
-        "Add GROQ_API_KEY to Streamlit Secrets and restart the app."
+        "Add GROQ_API_KEY to Streamlit Secrets "
+        "and restart the app."
     )
     st.stop()
 
@@ -471,11 +530,15 @@ progress_bar = st.progress(0)
 
 def update_progress(index, name):
     progress = min(
-        max(float(index) / 5.0, 0.0),
+        max(
+            float(index) / 5.0,
+            0.0,
+        ),
         1.0,
     )
 
     progress_bar.progress(progress)
+
     status.info(
         f"Stage {index}/5 - {name}..."
     )
@@ -510,17 +573,24 @@ errors = result.get(
 )
 
 if errors:
-    with st.expander("Workflow warnings"):
+    with st.expander(
+        "Workflow warnings"
+    ):
         for item in errors:
-            if isinstance(item, dict):
+            if isinstance(
+                item,
+                dict,
+            ):
                 stage = item.get(
                     "stage",
                     "Unknown stage",
                 )
+
                 error = item.get(
                     "error",
                     "Unknown error",
                 )
+
                 st.warning(
                     f"{stage}: {error}"
                 )
@@ -581,7 +651,10 @@ with tabs[3]:
     )
 
     if review:
-        if isinstance(review, dict):
+        if isinstance(
+            review,
+            dict,
+        ):
             score = review.get(
                 "quality_score"
             )
@@ -641,7 +714,9 @@ with tabs[4]:
             st.download_button(
                 label="Download Markdown",
                 data=markdown_bytes,
-                file_name=f"{safe_subject}_study_pack.md",
+                file_name=(
+                    f"{safe_subject}_study_pack.md"
+                ),
                 mime="text/markdown",
                 use_container_width=True,
             )
@@ -650,7 +725,9 @@ with tabs[4]:
             st.download_button(
                 label="Download PDF",
                 data=pdf_bytes,
-                file_name=f"{safe_subject}_study_pack.pdf",
+                file_name=(
+                    f"{safe_subject}_study_pack.pdf"
+                ),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -659,8 +736,13 @@ with tabs[4]:
             st.download_button(
                 label="Download Word",
                 data=word_bytes,
-                file_name=f"{safe_subject}_study_pack.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                file_name=(
+                    f"{safe_subject}_study_pack.docx"
+                ),
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
                 use_container_width=True,
             )
 
@@ -672,11 +754,14 @@ with tabs[4]:
 
 else:
 st.info(
-"Enter study material, choose your settings, and click Generate Personalized Study Pack to start the five-stage AI workflow."
+"Enter study material, choose your settings, "
+"and click Generate Personalized Study Pack "
+"to start the five-stage AI workflow."
 )
 
 st.divider()
 
 st.caption(
-"AI Study Pack Generator | Streamlit | Groq | Multi-stage AI Workflow"
+"AI Study Pack Generator | Streamlit | Groq | "
+"Multi-stage AI Workflow"
 )
