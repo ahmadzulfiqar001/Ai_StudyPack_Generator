@@ -1,7 +1,15 @@
 import os
 import tempfile
+import re
+from xml.sax.saxutils import escape
 
 import streamlit as st
+from docx import Document
+from docx.shared import Pt
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
 
 from ai_workflow import StudyPackWorkflow
 from utils import read_uploaded_file, validate_material
@@ -19,283 +27,294 @@ DEFAULT_MODEL = os.getenv(
 
 def get_api_key():
 try:
-    key = st.secrets.get("GROQ_API_KEY", "")
-    if key:
-        return str(key).strip()
-
+key = st.secrets.get("GROQ_API_KEY", "")
+if key:
+return str(key).strip()
 except Exception:
-    pass
+pass
 
-return os.getenv(
-    "GROQ_API_KEY",
-    "",
-).strip()
+```
+return os.getenv("GROQ_API_KEY", "").strip()
+```
 
 def create_pdf_file(content, title):
-from reportlab.lib.enums import TA_CENTER
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import (
-getSampleStyleSheet,
-ParagraphStyle,
+temp_file = tempfile.NamedTemporaryFile(
+delete=False,
+suffix=".pdf",
 )
-from reportlab.lib.units import mm
-from reportlab.platypus import (
-SimpleDocTemplate,
-Paragraph,
-Spacer,
-ListFlowable,
-ListItem,
-)
+temp_path = temp_file.name
+temp_file.close()
 
-file = tempfile.NamedTemporaryFile(
-    delete=False,
-    suffix=".pdf",
-)
-file.close()
-
-document = SimpleDocTemplate(
-    file.name,
-    pagesize=A4,
-    rightMargin=18 * mm,
-    leftMargin=18 * mm,
-    topMargin=18 * mm,
-    bottomMargin=18 * mm,
-    title=title,
-)
-
+```
 styles = getSampleStyleSheet()
 
 title_style = ParagraphStyle(
-    "StudyPackTitle",
+    "StudyTitle",
     parent=styles["Title"],
     fontSize=20,
     leading=24,
-    alignment=TA_CENTER,
     spaceAfter=16,
 )
 
-heading1_style = ParagraphStyle(
-    "StudyPackHeading1",
-    parent=styles["Heading1"],
-    fontSize=16,
-    leading=20,
-    spaceBefore=12,
-    spaceAfter=8,
-)
-
-heading2_style = ParagraphStyle(
-    "StudyPackHeading2",
+heading_style = ParagraphStyle(
+    "StudyHeading",
     parent=styles["Heading2"],
-    fontSize=13,
-    leading=17,
+    fontSize=14,
+    leading=18,
     spaceBefore=10,
     spaceAfter=6,
 )
 
 body_style = ParagraphStyle(
-    "StudyPackBody",
+    "StudyBody",
     parent=styles["BodyText"],
-    fontSize=10.5,
+    fontSize=10,
     leading=15,
     spaceAfter=6,
 )
 
-story = []
-bullet_items = []
+bullet_style = ParagraphStyle(
+    "StudyBullet",
+    parent=body_style,
+    leftIndent=12,
+    firstLineIndent=0,
+)
 
-def flush_bullets():
-    nonlocal bullet_items
-
-    if not bullet_items:
-        return
-
-    items = [
-        ListItem(
-            Paragraph(
-                item,
-                body_style,
-            )
-        )
-        for item in bullet_items
-    ]
-
-    story.append(
-        ListFlowable(
-            items,
-            bulletType="bullet",
-            leftIndent=15,
-        )
+story = [
+    Paragraph(
+        escape(title),
+        title_style,
     )
+]
 
-    story.append(
-        Spacer(1, 6)
-    )
+lines = content.splitlines()
 
-    bullet_items = []
+for line in lines:
+    stripped = line.strip()
 
-for raw_line in content.splitlines():
-    line = raw_line.strip()
+    if not stripped:
+        story.append(Spacer(1, 4))
+        continue
 
-    if not line:
-        flush_bullets()
+    if stripped.startswith("### "):
+        text = stripped[4:].strip()
         story.append(
-            Spacer(1, 4)
+            Paragraph(
+                escape(text),
+                heading_style,
+            )
         )
         continue
 
-    safe_line = (
-        line
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
+    if stripped.startswith("## "):
+        text = stripped[3:].strip()
+        story.append(
+            Paragraph(
+                escape(text),
+                heading_style,
+            )
+        )
+        continue
+
+    if stripped.startswith("# "):
+        text = stripped[2:].strip()
+        story.append(
+            Paragraph(
+                escape(text),
+                heading_style,
+            )
+        )
+        continue
+
+    if stripped.startswith("- ") or stripped.startswith("* "):
+        text = stripped[2:].strip()
+        text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+        text = re.sub(r"__(.*?)__", r"<b>\1</b>", text)
+        text = escape(text, quote=False)
+        text = text.replace("&lt;b&gt;", "<b>")
+        text = text.replace("&lt;/b&gt;", "</b>")
+
+        story.append(
+            Paragraph(
+                "• " + text,
+                bullet_style,
+            )
+        )
+        continue
+
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", stripped)
+    text = re.sub(r"__(.*?)__", r"<b>\1</b>", text)
+    text = escape(text, quote=False)
+    text = text.replace("&lt;b&gt;", "<b>")
+    text = text.replace("&lt;/b&gt;", "</b>")
+
+    story.append(
+        Paragraph(
+            text,
+            body_style,
+        )
     )
 
-    safe_line = safe_line.replace(
-        "**",
-        "",
-    )
-
-    safe_line = safe_line.replace(
-        "__",
-        "",
-    )
-
-    if line.startswith("# "):
-        flush_bullets()
-
-        story.append(
-            Paragraph(
-                safe_line[2:].strip(),
-                title_style,
-            )
-        )
-
-    elif line.startswith("## "):
-        flush_bullets()
-
-        story.append(
-            Paragraph(
-                safe_line[3:].strip(),
-                heading1_style,
-            )
-        )
-
-    elif line.startswith("### "):
-        flush_bullets()
-
-        story.append(
-            Paragraph(
-                safe_line[4:].strip(),
-                heading2_style,
-            )
-        )
-
-    elif line.startswith("- "):
-        bullet_items.append(
-            safe_line[2:].strip()
-        )
-
-    elif line.startswith("* "):
-        bullet_items.append(
-            safe_line[2:].strip()
-        )
-
-    else:
-        flush_bullets()
-
-        story.append(
-            Paragraph(
-                safe_line,
-                body_style,
-            )
-        )
-
-flush_bullets()
+document = SimpleDocTemplate(
+    temp_path,
+    pagesize=A4,
+    rightMargin=18 * mm,
+    leftMargin=18 * mm,
+    topMargin=18 * mm,
+    bottomMargin=18 * mm,
+)
 
 document.build(story)
 
-return file.name
+with open(temp_path, "rb") as file:
+    pdf_bytes = file.read()
 
-def create_word_file(content):
-from docx import Document
-from docx.shared import Pt
+try:
+    os.remove(temp_path)
+except OSError:
+    pass
 
+return pdf_bytes
+```
+
+def create_word_file(content, title):
+temp_file = tempfile.NamedTemporaryFile(
+delete=False,
+suffix=".docx",
+)
+temp_path = temp_file.name
+temp_file.close()
+
+```
 document = Document()
 
-normal_style = document.styles["Normal"]
-normal_style.font.name = "Arial"
-normal_style.font.size = Pt(11)
+document.add_heading(
+    title,
+    level=0,
+)
 
-for raw_line in content.splitlines():
-    line = raw_line.strip()
+for line in content.splitlines():
+    stripped = line.strip()
 
-    if not line:
-        document.add_paragraph("")
+    if not stripped:
+        document.add_paragraph()
         continue
 
-    if line.startswith("# "):
+    if stripped.startswith("### "):
         document.add_heading(
-            line[2:].strip(),
-            level=1,
-        )
-
-    elif line.startswith("## "):
-        document.add_heading(
-            line[3:].strip(),
-            level=2,
-        )
-
-    elif line.startswith("### "):
-        document.add_heading(
-            line[4:].strip(),
+            stripped[4:].strip(),
             level=3,
         )
+        continue
 
-    elif line.startswith("- "):
-        document.add_paragraph(
-            line[2:].strip(),
+    if stripped.startswith("## "):
+        document.add_heading(
+            stripped[3:].strip(),
+            level=2,
+        )
+        continue
+
+    if stripped.startswith("# "):
+        document.add_heading(
+            stripped[2:].strip(),
+            level=1,
+        )
+        continue
+
+    if stripped.startswith("- ") or stripped.startswith("* "):
+        paragraph = document.add_paragraph(
             style="List Bullet",
         )
+        text = stripped[2:].strip()
 
-    elif line.startswith("* "):
-        document.add_paragraph(
-            line[2:].strip(),
-            style="List Bullet",
+        parts = re.split(
+            r"(\*\*.*?\*\*|__.*?__)",
+            text,
         )
 
-    else:
-        paragraph = document.add_paragraph()
+        for part in parts:
+            if not part:
+                continue
 
-        parts = line.split("**")
-
-        for index, part in enumerate(parts):
-            run = paragraph.add_run(part)
-
-            if index % 2 == 1:
+            if (
+                part.startswith("**")
+                and part.endswith("**")
+            ):
+                run = paragraph.add_run(
+                    part[2:-2]
+                )
                 run.bold = True
+            elif (
+                part.startswith("__")
+                and part.endswith("__")
+            ):
+                run = paragraph.add_run(
+                    part[2:-2]
+                )
+                run.bold = True
+            else:
+                paragraph.add_run(part)
 
-file = tempfile.NamedTemporaryFile(
-    delete=False,
-    suffix=".docx",
-)
-file.close()
+        continue
 
-document.save(file.name)
+    paragraph = document.add_paragraph()
 
-return file.name
+    parts = re.split(
+        r"(\*\*.*?\*\*|__.*?__)",
+        stripped,
+    )
 
-st.title(
-"📚 AI Study Pack Generator"
-)
+    for part in parts:
+        if not part:
+            continue
+
+        if (
+            part.startswith("**")
+            and part.endswith("**")
+        ):
+            run = paragraph.add_run(
+                part[2:-2]
+            )
+            run.bold = True
+        elif (
+            part.startswith("__")
+            and part.endswith("__")
+        ):
+            run = paragraph.add_run(
+                part[2:-2]
+            )
+            run.bold = True
+        else:
+            paragraph.add_run(part)
+
+for paragraph in document.paragraphs:
+    for run in paragraph.runs:
+        run.font.size = Pt(10)
+
+document.save(temp_path)
+
+with open(temp_path, "rb") as file:
+    word_bytes = file.read()
+
+try:
+    os.remove(temp_path)
+except OSError:
+    pass
+
+return word_bytes
+```
+
+st.title("📚 AI Study Pack Generator")
 
 st.caption(
-"A multi-stage AI workflow for planning, generating, assessing, "
-"reviewing, and refining personalized study material."
+"A multi-stage AI workflow for planning, generating, "
+"assessing, reviewing, and refining personalized study material."
 )
 
 with st.sidebar:
 st.header("⚙️ Study Settings")
 
+```
 subject = st.text_input(
     "Subject",
     placeholder="e.g. Machine Learning",
@@ -352,6 +371,7 @@ st.markdown(
     5. Refinement
     """
 )
+```
 
 st.subheader("📖 Study Material")
 
@@ -364,37 +384,26 @@ material = st.text_area(
 "Paste your notes or lecture material",
 value=saved_material,
 height=300,
-placeholder=(
-"Paste the material you want to turn into "
-"a personalized study pack..."
-),
+placeholder="Paste the material you want to turn into a personalized study pack...",
 )
 
 uploaded = st.file_uploader(
 "Or upload a file",
-type=[
-"pdf",
-"txt",
-"md",
-"csv",
-],
+type=["pdf", "txt", "md", "csv"],
 )
 
 if uploaded:
 temp_path = None
 
+```
 try:
-    suffix = os.path.splitext(
-        uploaded.name
-    )[1]
+    suffix = os.path.splitext(uploaded.name)[1]
 
     with tempfile.NamedTemporaryFile(
         delete=False,
         suffix=suffix,
     ) as temp_file:
-        temp_file.write(
-            uploaded.getbuffer()
-        )
+        temp_file.write(uploaded.getbuffer())
         temp_path = temp_file.name
 
     uploaded_text = read_uploaded_file(
@@ -405,9 +414,7 @@ try:
         "Use Uploaded Material",
         use_container_width=True,
     ):
-        st.session_state["material"] = (
-            uploaded_text
-        )
+        st.session_state["material"] = uploaded_text
         st.rerun()
 
 except Exception as exc:
@@ -416,14 +423,12 @@ except Exception as exc:
     )
 
 finally:
-    if (
-        temp_path
-        and os.path.exists(temp_path)
-    ):
+    if temp_path and os.path.exists(temp_path):
         try:
             os.remove(temp_path)
         except OSError:
             pass
+```
 
 st.divider()
 
@@ -434,32 +439,27 @@ use_container_width=True,
 )
 
 if generate:
-    
 try:
-    validate_material(material)
-
+validate_material(material)
 except ValueError as exc:
-    st.error(str(exc))
-    st.stop()
+st.error(str(exc))
+st.stop()
 
+```
 api_key = get_api_key()
 
 if not api_key:
-    st.error(
-        "Groq API key is missing."
-    )
+    st.error("Groq API key is missing.")
     st.info(
-        "Add GROQ_API_KEY to Streamlit Secrets "
-        "and restart the app."
+        "Add GROQ_API_KEY to Streamlit Secrets and restart the app."
     )
     st.stop()
 
 try:
     workflow = StudyPackWorkflow(
         api_key=api_key,
-        model=model.strip(),
+        model=model,
     )
-
 except Exception as exc:
     st.error(
         f"Could not initialize AI workflow: {exc}"
@@ -471,15 +471,11 @@ progress_bar = st.progress(0)
 
 def update_progress(index, name):
     progress = min(
-        max(
-            float(index) / 5.0,
-            0.0,
-        ),
+        max(float(index) / 5.0, 0.0),
         1.0,
     )
 
     progress_bar.progress(progress)
-
     status.info(
         f"Stage {index}/5 - {name}..."
     )
@@ -489,7 +485,7 @@ try:
         "Running AI workflow with Groq..."
     ):
         result = workflow.run(
-            subject=subject.strip(),
+            subject=subject,
             level=level,
             material=material,
             pack_size=pack_size,
@@ -514,29 +510,20 @@ errors = result.get(
 )
 
 if errors:
-    with st.expander(
-        "⚠️ Workflow warnings"
-    ):
+    with st.expander("Workflow warnings"):
         for item in errors:
-
-            if isinstance(
-                item,
-                dict,
-            ):
+            if isinstance(item, dict):
                 stage = item.get(
                     "stage",
                     "Unknown stage",
                 )
-
                 error = item.get(
                     "error",
                     "Unknown error",
                 )
-
                 st.warning(
                     f"{stage}: {error}"
                 )
-
             else:
                 st.warning(
                     str(item)
@@ -594,11 +581,7 @@ with tabs[3]:
     )
 
     if review:
-
-        if isinstance(
-            review,
-            dict,
-        ):
+        if isinstance(review, dict):
             score = review.get(
                 "quality_score"
             )
@@ -613,191 +596,87 @@ with tabs[3]:
                 )
 
             st.json(review)
-
         else:
             st.write(review)
-
     else:
         st.info(
             "Review stage was not available."
         )
 
 with tabs[4]:
-
     final_pack = result.get(
         "final_pack",
         "",
     )
 
     if final_pack:
+        st.markdown(final_pack)
 
-        st.markdown(
-            final_pack
+        safe_subject = re.sub(
+            r"[^a-zA-Z0-9_-]+",
+            "_",
+            subject.strip(),
+        ).strip("_")
+
+        if not safe_subject:
+            safe_subject = "study_pack"
+
+        markdown_bytes = final_pack.encode(
+            "utf-8"
         )
 
-    else:
-
-        st.warning(
-            "Final study pack was not generated."
-        )
-
-
-if final_pack:
-
-    st.divider()
-
-    st.subheader(
-        "⬇️ Download Study Pack"
-    )
-
-    st.write(
-        "Download your completed study pack "
-        "in Markdown, PDF, or Word format."
-    )
-
-    safe_subject = (
-        subject.strip()
-        .replace("/", "-")
-        .replace("\\", "-")
-        .replace(":", "-")
-        .replace("*", "-")
-        .replace("?", "")
-        .replace('"', "")
-        .replace("<", "-")
-        .replace(">", "-")
-        .replace("|", "-")
-    )
-
-    if not safe_subject:
-        safe_subject = "AI_Study_Pack"
-
-    markdown_data = final_pack.encode(
-        "utf-8"
-    )
-
-    pdf_data = None
-
-    try:
-
-        pdf_path = create_pdf_file(
+        pdf_bytes = create_pdf_file(
             final_pack,
-            subject.strip()
-            or "AI Study Pack",
+            subject or "AI Study Pack",
         )
 
-        with open(
-            pdf_path,
-            "rb",
-        ) as pdf_file:
-            pdf_data = pdf_file.read()
-
-        try:
-            os.remove(pdf_path)
-        except OSError:
-            pass
-
-    except Exception as exc:
-
-        st.warning(
-            f"PDF generation failed: {exc}"
+        word_bytes = create_word_file(
+            final_pack,
+            subject or "AI Study Pack",
         )
 
-    word_data = None
+        col1, col2, col3 = st.columns(3)
 
-    try:
-
-        word_path = create_word_file(
-            final_pack
-        )
-
-        with open(
-            word_path,
-            "rb",
-        ) as word_file:
-            word_data = word_file.read()
-
-        try:
-            os.remove(word_path)
-        except OSError:
-            pass
-
-    except Exception as exc:
-
-        st.warning(
-            f"Word document generation failed: {exc}"
-        )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.download_button(
-            label="⬇️ Download Markdown",
-            data=markdown_data,
-            file_name=f"{safe_subject}.md",
-            mime="text/markdown",
-            use_container_width=True,
-        )
-
-    with col2:
-
-        if pdf_data:
-
+        with col1:
             st.download_button(
-                label="📄 Download PDF",
-                data=pdf_data,
-                file_name=f"{safe_subject}.pdf",
+                label="Download Markdown",
+                data=markdown_bytes,
+                file_name=f"{safe_subject}_study_pack.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        with col2:
+            st.download_button(
+                label="Download PDF",
+                data=pdf_bytes,
+                file_name=f"{safe_subject}_study_pack.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
 
-        else:
-
-            st.button(
-                "📄 PDF unavailable",
-                disabled=True,
-                use_container_width=True,
-            )
-
-    with col3:
-
-        if word_data:
-
+        with col3:
             st.download_button(
-                label="📝 Download Word",
-                data=word_data,
-                file_name=f"{safe_subject}.docx",
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.wordprocessingml.document"
-                ),
+                label="Download Word",
+                data=word_bytes,
+                file_name=f"{safe_subject}_study_pack.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
             )
 
-        else:
-
-            st.button(
-                "📝 Word unavailable",
-                disabled=True,
-                use_container_width=True,
-            )
-
-    st.success(
-        "Your study pack is ready to download "
-        "in Markdown, PDF, and Word formats."
-    )
+    else:
+        st.warning(
+            "Final study pack was not generated."
+        )
+```
 
 else:
-
 st.info(
-    "Enter study material, choose your settings, and click "
-    "Generate Personalized Study Pack to start the "
-    "five-stage AI workflow."
+"Enter study material, choose your settings, and click Generate Personalized Study Pack to start the five-stage AI workflow."
 )
 
 st.divider()
 
 st.caption(
-"AI Study Pack Generator | Streamlit | Groq | "
-"Multi-stage AI Workflow"
+"AI Study Pack Generator | Streamlit | Groq | Multi-stage AI Workflow"
 )
